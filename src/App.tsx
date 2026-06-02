@@ -649,7 +649,18 @@ function App() {
 
           <div className="catalog-grid">
             {filteredProducts.map((product) => (
-              <ProductCard key={product.id} product={product} />
+              <ProductCard
+                key={product.id}
+                product={product}
+                onStyleProduct={(selectedProduct) =>
+                  void askStylist(
+                    undefined,
+                    `Style a coordinated outfit around ${selectedProduct.name} by ${selectedProduct.brand}. Keep it ${selectedProduct.styleTags
+                      .slice(0, 2)
+                      .join(" and ")} for ${selectedProduct.occasions[0]}.`,
+                  )
+                }
+              />
             ))}
           </div>
         </section>
@@ -760,7 +771,13 @@ function ProductRow({ product }: { product: Product }) {
   );
 }
 
-function ProductCard({ product }: { product: Product }) {
+function ProductCard({
+  product,
+  onStyleProduct,
+}: {
+  product: Product;
+  onStyleProduct: (product: Product) => void;
+}) {
   return (
     <article className="product-card">
       <div className="product-image">
@@ -782,7 +799,7 @@ function ProductCard({ product }: { product: Product }) {
             ),
           )}
         </div>
-        <button type="button" onClick={() => undefined}>
+        <button type="button" onClick={() => onStyleProduct(product)}>
           <ShoppingBag size={17} />
           Add to styling set
           <ChevronRight size={16} />
