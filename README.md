@@ -10,6 +10,8 @@ A Firebase-backed React prototype that demonstrates a customer-facing retail sty
 - Structured prompt generation from shopper queries
 - Lightweight embedding-style retrieval and product ranking in the browser
 - Coordinated outfit builder with budget, color, category, occasion, climate, and size signals
+- Interactive shopper cart with quantity controls and cart-to-saved-outfit flow
+- Theme selector with `✨ Default`, `☀️ Light`, and `🌙 Dark` modes
 - Responsive retail UI built with React, TypeScript, Vite, and Lucide icons
 
 ## Tech Stack
@@ -61,6 +63,15 @@ firebase deploy
 4. Review the ranked products and structured prompt.
 5. Save outfits to Firestore.
 6. Upload wardrobe inspiration images to Firebase Storage.
+7. Add recommended or catalog products to the cart, refine the cart with AI, and save the cart as an outfit.
+
+## Live Website
+
+Firebase Hosting URL:
+
+```text
+https://customer-facing-shopping-apps.web.app
+```
 
 ## Repository
 

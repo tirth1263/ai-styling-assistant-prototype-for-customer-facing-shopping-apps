@@ -12,12 +12,17 @@ import {
   Loader2,
   LogOut,
   MessageSquareText,
+  Minus,
   PackageSearch,
+  Palette,
+  Plus,
   Search,
   Send,
   ShieldCheck,
   ShoppingBag,
+  ShoppingCart,
   Sparkles,
+  Trash2,
   UploadCloud,
   UserCircle,
 } from "lucide-react";
@@ -25,6 +30,7 @@ import {
   type ChangeEvent,
   type FormEvent,
   type ReactNode,
+  type SyntheticEvent,
   useEffect,
   useMemo,
   useState,
@@ -49,7 +55,12 @@ import { generateStylistResult } from "./lib/stylistEngine";
 import { sampleProducts } from "./data/sampleProducts";
 import type { ChatMessage, Product, SavedOutfit, StylistResult, WardrobeItem } from "./types";
 
-type Tab = "stylist" | "catalog" | "saved";
+type Tab = "stylist" | "catalog" | "saved" | "cart";
+type ThemeMode = "default" | "light" | "dark";
+type CartItem = {
+  product: Product;
+  quantity: number;
+};
 
 const promptChips = [
   "Build a polished work outfit under $300",
@@ -69,6 +80,12 @@ const categories = [
   "accessory",
 ] as const;
 
+const themeOptions: { value: ThemeMode; label: string }[] = [
+  { value: "default", label: "✨ Default" },
+  { value: "light", label: "☀️ Light" },
+  { value: "dark", label: "🌙 Dark" },
+];
+
 const currency = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
@@ -77,12 +94,39 @@ const currency = new Intl.NumberFormat("en-US", {
 
 const formatPrice = (value: number) => currency.format(value);
 
+const isThemeMode = (value: string | null): value is ThemeMode =>
+  value === "default" || value === "light" || value === "dark";
+
+const readInitialTheme = (): ThemeMode => {
+  if (typeof window === "undefined") return "default";
+  const stored = window.localStorage.getItem("stylist-theme");
+  return isThemeMode(stored) ? stored : "default";
+};
+
+const readInitialCart = (): CartItem[] => {
+  if (typeof window === "undefined") return [];
+
+  try {
+    const stored = window.localStorage.getItem("stylist-cart");
+    const parsed = stored ? (JSON.parse(stored) as CartItem[]) : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((item) => item?.product?.id && item.quantity > 0)
+      : [];
+  } catch {
+    return [];
+  }
+};
+
 const createAssistantMessage = (result: StylistResult): ChatMessage => ({
   id: crypto.randomUUID(),
   role: "assistant",
   createdAt: new Date(),
   content: `${result.title}: ${result.rationale}`,
 });
+
+const hideBrokenImage = (event: SyntheticEvent<HTMLImageElement>) => {
+  event.currentTarget.style.display = "none";
+};
 
 const upsertUserProfile = async (user: User) => {
   await setDoc(
@@ -102,6 +146,8 @@ function App() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<Tab>("stylist");
+  const [themeMode, setThemeMode] = useState<ThemeMode>(readInitialTheme);
+  const [cartItems, setCartItems] = useState<CartItem[]>(readInitialCart);
   const [products, setProducts] = useState<Product[]>(sampleProducts);
   const [usingFallbackCatalog, setUsingFallbackCatalog] = useState(true);
   const [queryText, setQueryText] = useState(promptChips[0]);
@@ -123,6 +169,15 @@ function App() {
   const [seeding, setSeeding] = useState(false);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState("");
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = themeMode;
+    window.localStorage.setItem("stylist-theme", themeMode);
+  }, [themeMode]);
+
+  useEffect(() => {
+    window.localStorage.setItem("stylist-cart", JSON.stringify(cartItems));
+  }, [cartItems]);
 
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged(async (firebaseUser) => {
@@ -231,6 +286,21 @@ function App() {
     });
   }, [categoryFilter, products, searchTerm]);
 
+  const cartCount = useMemo(
+    () => cartItems.reduce((sum, item) => sum + item.quantity, 0),
+    [cartItems],
+  );
+
+  const cartTotal = useMemo(
+    () =>
+      cartItems.reduce((sum, item) => sum + item.product.price * item.quantity, 0),
+    [cartItems],
+  );
+
+  const heroProducts = activeResult.outfit.length
+    ? activeResult.outfit.slice(0, 5)
+    : products.slice(0, 5);
+
   const catalogStats = useMemo(() => {
     const average =
       products.reduce((sum, product) => sum + product.price, 0) / Math.max(products.length, 1);
@@ -250,6 +320,47 @@ function App() {
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Google sign in failed.");
     }
+  };
+
+  const mergeCartProducts = (current: CartItem[], productsToAdd: Product[]) => {
+    const next = new Map(current.map((item) => [item.product.id, { ...item }]));
+
+    productsToAdd.forEach((product) => {
+      const existing = next.get(product.id);
+      next.set(product.id, {
+        product,
+        quantity: existing ? existing.quantity + 1 : 1,
+      });
+    });
+
+    return Array.from(next.values());
+  };
+
+  const addProductsToCart = (productsToAdd: Product[], message?: string) => {
+    if (!productsToAdd.length) return;
+    setCartItems((current) => mergeCartProducts(current, productsToAdd));
+    setStatus(message ?? `${productsToAdd[0].name} added to cart.`);
+  };
+
+  const updateCartQuantity = (productId: string, delta: number) => {
+    setCartItems((current) =>
+      current
+        .map((item) =>
+          item.product.id === productId
+            ? { ...item, quantity: item.quantity + delta }
+            : item,
+        )
+        .filter((item) => item.quantity > 0),
+    );
+  };
+
+  const removeCartItem = (productId: string) => {
+    setCartItems((current) => current.filter((item) => item.product.id !== productId));
+  };
+
+  const clearCart = () => {
+    setCartItems([]);
+    setStatus("Cart cleared.");
   };
 
   const seedCatalog = async () => {
@@ -349,6 +460,42 @@ function App() {
     }
   };
 
+  const saveCartAsOutfit = async () => {
+    if (!user) {
+      setStatus("Sign in with Google to save your cart.");
+      return;
+    }
+
+    if (!cartItems.length) {
+      setStatus("Add products to the cart before saving it.");
+      return;
+    }
+
+    setSaving(true);
+    setStatus("");
+
+    try {
+      await addDoc(collection(db, "users", user.uid, "savedOutfits"), {
+        title: "Custom Shopper Cart",
+        query: "Manual cart assembled from product actions",
+        rationale: "Saved from the interactive shopper cart.",
+        palette: Array.from(
+          new Set(cartItems.flatMap((item) => item.product.colors)),
+        ).slice(0, 5),
+        total: cartTotal,
+        items: cartItems.flatMap((item) =>
+          Array.from({ length: item.quantity }, () => item.product),
+        ),
+        createdAt: serverTimestamp(),
+      });
+      setStatus("Cart saved to Firestore as a shopper outfit.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not save cart.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const uploadWardrobeItem = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -361,11 +508,29 @@ function App() {
     setUploading(true);
     setStatus("");
 
+    if (!file.type.startsWith("image/")) {
+      setStatus("Please upload an image file.");
+      event.target.value = "";
+      return;
+    }
+
     try {
       const cleanName = file.name.replace(/[^a-z0-9.-]/gi, "-").toLowerCase();
-      const fileRef = ref(storage, `wardrobe/${user.uid}/${Date.now()}-${cleanName}`);
-      await uploadBytes(fileRef, file, { contentType: file.type });
-      const imageUrl = await getDownloadURL(fileRef);
+      let imageUrl = "";
+      let tags = ["user-upload", "wardrobe", "firebase-storage"];
+      let uploadStatus = "Wardrobe image uploaded to Firebase Storage.";
+
+      try {
+        const fileRef = ref(storage, `wardrobe/${user.uid}/${Date.now()}-${cleanName}`);
+        await uploadBytes(fileRef, file, { contentType: file.type });
+        imageUrl = await getDownloadURL(fileRef);
+      } catch {
+        imageUrl = await compressImageToDataUrl(file);
+        tags = ["user-upload", "wardrobe", "firestore-image-fallback"];
+        uploadStatus =
+          "Storage is not initialized yet, so the wardrobe image was saved as a compressed Firestore record.";
+      }
+
       const readableName = file.name
         .replace(/\.[^/.]+$/, "")
         .replace(/[-_]+/g, " ")
@@ -374,10 +539,10 @@ function App() {
       await addDoc(collection(db, "users", user.uid, "wardrobeItems"), {
         name: readableName || "Uploaded wardrobe item",
         imageUrl,
-        tags: ["user-upload", "wardrobe"],
+        tags,
         createdAt: serverTimestamp(),
       });
-      setStatus("Wardrobe image uploaded to Firebase Storage.");
+      setStatus(uploadStatus);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Upload failed.");
     } finally {
@@ -400,6 +565,21 @@ function App() {
         </div>
 
         <div className="topbar-actions">
+          <div className="theme-switcher" role="group" aria-label="Theme selector">
+            <Palette size={17} aria-hidden="true" />
+            {themeOptions.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                className={themeMode === option.value ? "active" : ""}
+                aria-pressed={themeMode === option.value}
+                onClick={() => setThemeMode(option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+
           <button
             className="ghost-button"
             type="button"
@@ -459,12 +639,22 @@ function App() {
           </p>
         </div>
         <div className="hero-media" aria-label="Styled product collage">
-          {sampleProducts.slice(0, 5).map((product) => (
-            <article key={product.id} className="hero-tile">
-              <img src={product.imageUrl} alt={product.name} loading="eager" />
+          {heroProducts.map((product) => (
+            <button
+              key={product.id}
+              type="button"
+              className="hero-tile"
+              onClick={() => addProductsToCart([product])}
+            >
+              <img
+                src={product.imageUrl}
+                alt={product.name}
+                loading="eager"
+                onError={hideBrokenImage}
+              />
               <span>{product.category}</span>
               <strong>{product.name}</strong>
-            </article>
+            </button>
           ))}
         </div>
       </section>
@@ -480,7 +670,7 @@ function App() {
           icon={<Gauge size={20} />}
           label="Avg. price"
           value={formatPrice(catalogStats.average)}
-          detail="Used for budget fit"
+          detail="Live catalog signal"
         />
         <MetricCard
           icon={<BrainCircuit size={20} />}
@@ -493,6 +683,12 @@ function App() {
           label="Saved outfits"
           value={savedOutfits.length.toString()}
           detail={user ? "Stored in Firestore" : "Sign in to save"}
+        />
+        <MetricCard
+          icon={<ShoppingCart size={20} />}
+          label="Cart items"
+          value={cartCount.toString()}
+          detail={`${formatPrice(cartTotal)} total`}
         />
       </section>
 
@@ -520,6 +716,15 @@ function App() {
         >
           <Heart size={18} />
           Saved
+        </button>
+        <button
+          type="button"
+          className={activeTab === "cart" ? "active" : ""}
+          onClick={() => setActiveTab("cart")}
+        >
+          <ShoppingCart size={18} />
+          Cart
+          {cartCount ? <span className="cart-badge">{cartCount}</span> : null}
         </button>
       </nav>
 
@@ -578,16 +783,32 @@ function App() {
                 <p className="eyebrow">Outfit render</p>
                 <h2>{activeResult.title}</h2>
               </div>
-              <button
-                className="ghost-button"
-                type="button"
-                onClick={saveOutfit}
-                disabled={saving}
-                title="Save outfit"
-              >
-                {saving ? <Loader2 className="spin" size={18} /> : <Heart size={18} />}
-                <span>Save</span>
-              </button>
+              <div className="panel-actions">
+                <button
+                  className="ghost-button"
+                  type="button"
+                  onClick={() =>
+                    addProductsToCart(
+                      activeResult.outfit,
+                      "Recommended outfit added to cart.",
+                    )
+                  }
+                  title="Add outfit to cart"
+                >
+                  <ShoppingCart size={18} />
+                  <span>Add outfit</span>
+                </button>
+                <button
+                  className="ghost-button"
+                  type="button"
+                  onClick={saveOutfit}
+                  disabled={saving}
+                  title="Save outfit"
+                >
+                  {saving ? <Loader2 className="spin" size={18} /> : <Heart size={18} />}
+                  <span>Save</span>
+                </button>
+              </div>
             </div>
 
             <p className="rationale">{activeResult.rationale}</p>
@@ -603,7 +824,11 @@ function App() {
 
             <div className="outfit-list">
               {activeResult.outfit.map((product) => (
-                <ProductRow key={product.id} product={product} />
+                <ProductRow
+                  key={product.id}
+                  product={product}
+                  onAddToCart={() => addProductsToCart([product])}
+                />
               ))}
             </div>
 
@@ -655,6 +880,7 @@ function App() {
               <ProductCard
                 key={product.id}
                 product={product}
+                onAddToCart={(selectedProduct) => addProductsToCart([selectedProduct])}
                 onStyleProduct={(selectedProduct) =>
                   void askStylist(
                     undefined,
@@ -687,10 +913,20 @@ function App() {
             {wardrobe.length ? (
               <div className="wardrobe-grid">
                 {wardrobe.map((item) => (
-                  <article key={item.id} className="wardrobe-card">
-                    <img src={item.imageUrl} alt={item.name} />
+                  <button
+                    key={item.id}
+                    type="button"
+                    className="wardrobe-card"
+                    onClick={() =>
+                      void askStylist(
+                        undefined,
+                        `Create a coordinated outfit inspired by my wardrobe item named ${item.name}.`,
+                      )
+                    }
+                  >
+                    <img src={item.imageUrl} alt={item.name} onError={hideBrokenImage} />
                     <p>{item.name}</p>
-                  </article>
+                  </button>
                 ))}
               </div>
             ) : (
@@ -715,13 +951,36 @@ function App() {
                   <article key={outfit.id} className="saved-card">
                     <div className="saved-images">
                       {outfit.items.slice(0, 4).map((item) => (
-                        <img key={item.id} src={item.imageUrl} alt={item.name} />
+                        <img
+                          key={item.id}
+                          src={item.imageUrl}
+                          alt={item.name}
+                          onError={hideBrokenImage}
+                        />
                       ))}
                     </div>
                     <div>
                       <h3>{outfit.title}</h3>
                       <p>{outfit.rationale}</p>
                       <strong>{formatPrice(outfit.total)}</strong>
+                      <div className="saved-actions">
+                        <button
+                          type="button"
+                          onClick={() => void askStylist(undefined, outfit.query)}
+                        >
+                          <Sparkles size={16} />
+                          Load look
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            addProductsToCart(outfit.items, "Saved look added to cart.")
+                          }
+                        >
+                          <ShoppingCart size={16} />
+                          Add to cart
+                        </button>
+                      </div>
                     </div>
                   </article>
                 ))}
@@ -733,6 +992,121 @@ function App() {
               </div>
             )}
           </div>
+        </section>
+      ) : null}
+
+      {activeTab === "cart" ? (
+        <section className="cart-layout">
+          <div className="cart-panel">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">Shopper cart</p>
+                <h2>Interactive cart</h2>
+              </div>
+              <button
+                className="ghost-button"
+                type="button"
+                onClick={clearCart}
+                disabled={!cartItems.length}
+                title="Clear cart"
+              >
+                <Trash2 size={18} />
+                <span>Clear</span>
+              </button>
+            </div>
+
+            {cartItems.length ? (
+              <div className="cart-list">
+                {cartItems.map((item) => (
+                  <article key={item.product.id} className="cart-item">
+                    <img
+                      src={item.product.imageUrl}
+                      alt={item.product.name}
+                      onError={hideBrokenImage}
+                    />
+                    <div>
+                      <span>{item.product.category}</span>
+                      <h3>{item.product.name}</h3>
+                      <p>{item.product.brand}</p>
+                    </div>
+                    <strong>{formatPrice(item.product.price * item.quantity)}</strong>
+                    <div className="quantity-controls" aria-label="Quantity controls">
+                      <button
+                        type="button"
+                        onClick={() => updateCartQuantity(item.product.id, -1)}
+                        title="Decrease quantity"
+                      >
+                        <Minus size={15} />
+                      </button>
+                      <span>{item.quantity}</span>
+                      <button
+                        type="button"
+                        onClick={() => updateCartQuantity(item.product.id, 1)}
+                        title="Increase quantity"
+                      >
+                        <Plus size={15} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeCartItem(item.product.id)}
+                        title="Remove item"
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="empty-state">
+                <ShoppingCart size={28} />
+                <p>Add products from the outfit render, hero tiles, catalog, or saved looks.</p>
+              </div>
+            )}
+          </div>
+
+          <aside className="cart-summary">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">Checkout prep</p>
+                <h2>Cart summary</h2>
+              </div>
+            </div>
+
+            <div className="summary-lines">
+              <span>Items</span>
+              <strong>{cartCount}</strong>
+              <span>Total</span>
+              <strong>{formatPrice(cartTotal)}</strong>
+            </div>
+
+            <button
+              className="primary-button"
+              type="button"
+              disabled={!cartItems.length}
+              onClick={() =>
+                void askStylist(
+                  undefined,
+                  `Refine a coordinated outfit around these cart items: ${cartItems
+                    .map((item) => `${item.quantity} ${item.product.name}`)
+                    .join(", ")}.`,
+                )
+              }
+            >
+              <Sparkles size={18} />
+              <span>Refine with AI</span>
+            </button>
+
+            <button
+              className="ghost-button"
+              type="button"
+              disabled={!cartItems.length || saving}
+              onClick={() => void saveCartAsOutfit()}
+            >
+              {saving ? <Loader2 className="spin" size={18} /> : <Bookmark size={18} />}
+              <span>Save cart</span>
+            </button>
+          </aside>
         </section>
       ) : null}
     </main>
@@ -760,31 +1134,47 @@ function MetricCard({
   );
 }
 
-function ProductRow({ product }: { product: Product }) {
+function ProductRow({
+  product,
+  onAddToCart,
+}: {
+  product: Product;
+  onAddToCart: () => void;
+}) {
   return (
     <article className="product-row">
-      <img src={product.imageUrl} alt={product.name} />
+      <img src={product.imageUrl} alt={product.name} onError={hideBrokenImage} />
       <div>
         <span>{product.category}</span>
         <h3>{product.name}</h3>
         <p>{product.brand}</p>
       </div>
       <strong>{formatPrice(product.price)}</strong>
+      <button
+        type="button"
+        className="row-action"
+        onClick={onAddToCart}
+        title="Add item to cart"
+      >
+        <Plus size={16} />
+      </button>
     </article>
   );
 }
 
 function ProductCard({
   product,
+  onAddToCart,
   onStyleProduct,
 }: {
   product: Product;
+  onAddToCart: (product: Product) => void;
   onStyleProduct: (product: Product) => void;
 }) {
   return (
     <article className="product-card">
       <div className="product-image">
-        <img src={product.imageUrl} alt={product.name} />
+        <img src={product.imageUrl} alt={product.name} onError={hideBrokenImage} />
       </div>
       <div className="product-card-body">
         <div className="product-card-title">
@@ -802,15 +1192,57 @@ function ProductCard({
             ),
           )}
         </div>
-        <button type="button" onClick={() => onStyleProduct(product)}>
-          <ShoppingBag size={17} />
-          Style this item
-          <ChevronRight size={16} />
-        </button>
+        <div className="product-card-actions">
+          <button type="button" onClick={() => onStyleProduct(product)}>
+            <ShoppingBag size={17} />
+            Style this item
+            <ChevronRight size={16} />
+          </button>
+          <button type="button" onClick={() => onAddToCart(product)}>
+            <ShoppingCart size={17} />
+            Add to cart
+            <Plus size={16} />
+          </button>
+        </div>
       </div>
     </article>
   );
 }
+
+const compressImageToDataUrl = async (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const image = new Image();
+    const objectUrl = URL.createObjectURL(file);
+
+    image.onload = () => {
+      const maxDimension = 720;
+      const scale = Math.min(
+        1,
+        maxDimension / Math.max(image.naturalWidth, image.naturalHeight),
+      );
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+      const context = canvas.getContext("2d");
+
+      if (!context) {
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error("Could not prepare wardrobe image."));
+        return;
+      }
+
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(objectUrl);
+      resolve(canvas.toDataURL("image/jpeg", 0.68));
+    };
+
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("Could not read wardrobe image."));
+    };
+
+    image.src = objectUrl;
+  });
 
 const colorMap: Record<string, string> = {
   black: "#191816",
