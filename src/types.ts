@@ -35,6 +35,8 @@ export type StyleIntent = {
   categories: Category[];
   constraints: string[];
   budget?: number;
+  budgetScope?: "total" | "item";
+  wantsCompleteOutfit: boolean;
   climate?: string;
   size?: string;
   structuredPrompt: string;

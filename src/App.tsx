@@ -299,7 +299,12 @@ function App() {
 
   const heroProducts = activeResult.outfit.length
     ? activeResult.outfit.slice(0, 5)
-    : products.slice(0, 5);
+    : activeResult.intent.budget
+      ? products
+          .filter((product) => product.price <= activeResult.intent.budget!)
+          .sort((a, b) => a.price - b.price)
+          .slice(0, 5)
+      : products.slice(0, 5);
 
   const catalogStats = useMemo(() => {
     const average =
@@ -793,6 +798,7 @@ function App() {
                       "Recommended outfit added to cart.",
                     )
                   }
+                  disabled={!activeResult.outfit.length}
                   title="Add outfit to cart"
                 >
                   <ShoppingCart size={18} />
@@ -802,7 +808,7 @@ function App() {
                   className="ghost-button"
                   type="button"
                   onClick={saveOutfit}
-                  disabled={saving}
+                  disabled={saving || !activeResult.outfit.length}
                   title="Save outfit"
                 >
                   {saving ? <Loader2 className="spin" size={18} /> : <Heart size={18} />}
@@ -813,28 +819,37 @@ function App() {
 
             <p className="rationale">{activeResult.rationale}</p>
 
-            <div className="palette-row" aria-label="Recommended color palette">
-              {activeResult.palette.map((color) => (
-                <span key={color} className="palette-swatch">
-                  <i style={{ backgroundColor: colorToCss(color) }} />
-                  {color}
-                </span>
-              ))}
-            </div>
+            {activeResult.palette.length ? (
+              <div className="palette-row" aria-label="Recommended color palette">
+                {activeResult.palette.map((color) => (
+                  <span key={color} className="palette-swatch">
+                    <i style={{ backgroundColor: colorToCss(color) }} />
+                    {color}
+                  </span>
+                ))}
+              </div>
+            ) : null}
 
-            <div className="outfit-list">
-              {activeResult.outfit.map((product) => (
-                <ProductRow
-                  key={product.id}
-                  product={product}
-                  onAddToCart={() => addProductsToCart([product])}
-                />
-              ))}
-            </div>
+            {activeResult.outfit.length ? (
+              <div className="outfit-list">
+                {activeResult.outfit.map((product) => (
+                  <ProductRow
+                    key={product.id}
+                    product={product}
+                    onAddToCart={() => addProductsToCart([product])}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="empty-state">
+                <PackageSearch size={28} />
+                <p>No exact outfit matches those hard constraints in the current catalog.</p>
+              </div>
+            )}
 
             <div className="result-total">
-              <span>Estimated outfit total</span>
-              <strong>{formatPrice(activeResult.total)}</strong>
+              <span>{activeResult.outfit.length ? "Exact outfit total" : "Exact matches"}</span>
+              <strong>{activeResult.outfit.length ? formatPrice(activeResult.total) : "0"}</strong>
             </div>
 
             <details className="prompt-details">

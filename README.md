@@ -40,6 +40,12 @@ A Firebase-backed React prototype that demonstrates a customer-facing retail sty
 
 4. Open the local URL printed by Vite.
 
+5. Verify the styling engine budget rules:
+
+   ```bash
+   npm run test:engine
+   ```
+
 ## Firebase Setup
 
 The Firebase project is configured for:

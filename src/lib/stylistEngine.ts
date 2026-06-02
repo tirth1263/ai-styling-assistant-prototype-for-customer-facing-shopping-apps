@@ -70,6 +70,16 @@ const colorTerms = [
   "tortoise",
 ];
 
+const completeOutfitTerms = [
+  "outfit",
+  "look",
+  "cart",
+  "ensemble",
+  "complete",
+  "full",
+  "head-to-toe",
+];
+
 const stopWords = new Set([
   "a",
   "an",
@@ -156,8 +166,30 @@ const extractBudget = (query: string) => {
 };
 
 const extractSize = (query: string) => {
-  const size = query.match(/\b(?:size\s*)?(xs|s|m|l|xl|xxl|\d{1,2})\b/i);
-  return size?.[1]?.toUpperCase();
+  const explicitSize = query.match(/\bsize\s*(xs|s|m|l|xl|xxl|\d{1,2})\b/i);
+  const alphaSize = query.match(/\b(xs|s|m|l|xl|xxl)\b/i);
+  return (explicitSize?.[1] ?? alphaSize?.[1])?.toUpperCase();
+};
+
+const inferBudgetScope = (
+  query: string,
+  tokens: string[],
+  categories: Category[],
+): "total" | "item" => {
+  const lowerQuery = query.toLowerCase();
+  if (
+    /(per\s+(item|piece|product)|each\s+(item|piece|product)|every\s+(item|piece|product)|per-item)/i.test(
+      query,
+    )
+  ) {
+    return "item";
+  }
+
+  if (completeOutfitTerms.some((term) => tokens.includes(term) || lowerQuery.includes(term))) {
+    return "total";
+  }
+
+  return categories.length === 1 ? "item" : "total";
 };
 
 const extractClimate = (tokens: string[]) => {
@@ -181,16 +213,24 @@ export const parseStyleIntent = (query: string): StyleIntent => {
   const tokens = tokenize(query);
   const palette = colorTerms.filter((color) => tokens.includes(color));
   const budget = extractBudget(query);
-  const size = extractSize(query);
   const climate = extractClimate(tokens);
   const categories = categoriesFromTokens(tokens);
+  const budgetScope = budget ? inferBudgetScope(query, tokens, categories) : undefined;
+  const wantsCompleteOutfit =
+    categories.length === 0 ||
+    completeOutfitTerms.some((term) => tokens.includes(term) || query.toLowerCase().includes(term));
+  const size = extractSize(query);
   const occasion = firstMatch(tokens, occasionTerms, "everyday");
   const vibe = firstMatch(tokens, vibeTerms, "polished");
   const constraints = [
-    budget ? `under $${budget}` : "",
+    budget ? `under $${budget}${budgetScope === "item" ? " per item" : " total"}` : "",
     size ? `size ${size}` : "",
     climate ? `${climate} weather` : "",
-    categories.length ? `needs ${categories.join(", ")}` : "",
+    categories.length
+      ? `needs ${categories.join(", ")}`
+      : wantsCompleteOutfit
+        ? "complete outfit"
+        : "",
   ].filter(Boolean);
 
   const structuredPrompt = JSON.stringify(
@@ -204,6 +244,7 @@ export const parseStyleIntent = (query: string): StyleIntent => {
         palette: palette.length ? palette : ["flexible"],
         categories: categories.length ? categories : ["complete outfit"],
         constraints,
+        budgetScope,
       },
       retrievalSignals: tokens,
     },
@@ -220,6 +261,8 @@ export const parseStyleIntent = (query: string): StyleIntent => {
     categories,
     constraints,
     budget,
+    budgetScope,
+    wantsCompleteOutfit,
     climate,
     size,
     structuredPrompt,
@@ -316,10 +359,13 @@ const pickBest = (
   recommendations: Recommendation[],
   category: Category,
   used: Set<string>,
+  remainingBudget?: number,
 ) => {
   const item = recommendations.find(
     (recommendation) =>
-      recommendation.product.category === category && !used.has(recommendation.product.id),
+      recommendation.product.category === category &&
+      !used.has(recommendation.product.id) &&
+      (remainingBudget === undefined || recommendation.product.price <= remainingBudget),
   );
 
   if (item) {
@@ -330,16 +376,169 @@ const pickBest = (
   return undefined;
 };
 
+const productMeetsHardConstraints = (product: Product, intent: StyleIntent) => {
+  if (intent.size && !product.sizes.includes(intent.size)) {
+    return false;
+  }
+
+  if (
+    intent.budget &&
+    intent.budgetScope === "item" &&
+    product.price > intent.budget
+  ) {
+    return false;
+  }
+
+  return true;
+};
+
+const outfitTotal = (products: Product[]) =>
+  products.reduce((sum, product) => sum + product.price, 0);
+
+const categoryScore = (recommendations: Recommendation[], product: Product) =>
+  recommendations.find((recommendation) => recommendation.product.id === product.id)?.score ??
+  0;
+
+const bestPairUnderBudget = (
+  recommendations: Recommendation[],
+  firstCategory: Category,
+  secondCategory: Category,
+  budget: number,
+) => {
+  const firstItems = recommendations.filter(
+    ({ product }) => product.category === firstCategory,
+  );
+  const secondItems = recommendations.filter(
+    ({ product }) => product.category === secondCategory,
+  );
+
+  return firstItems
+    .flatMap((first) =>
+      secondItems.map((second) => ({
+        products: [first.product, second.product],
+        score: first.score + second.score,
+        total: first.product.price + second.product.price,
+      })),
+    )
+    .filter((candidate) => candidate.total <= budget)
+    .sort((a, b) => b.score - a.score || a.total - b.total)[0]?.products;
+};
+
+const bestSingleUnderBudget = (
+  recommendations: Recommendation[],
+  category: Category,
+  budget: number,
+) =>
+  recommendations.find(
+    ({ product }) => product.category === category && product.price <= budget,
+  )?.product;
+
+const buildBudgetedCompleteOutfit = (
+  recommendations: Recommendation[],
+  intent: StyleIntent,
+) => {
+  if (!intent.budget) return undefined;
+
+  const dress = bestSingleUnderBudget(recommendations, "dress", intent.budget);
+  const separates = bestPairUnderBudget(recommendations, "top", "bottom", intent.budget);
+  const dressScore = dress ? categoryScore(recommendations, dress) : -Infinity;
+  const separatesScore = separates
+    ? separates.reduce((sum, product) => sum + categoryScore(recommendations, product), 0)
+    : -Infinity;
+
+  const outfit =
+    separates && separatesScore >= dressScore ? [...separates] : dress ? [dress] : [];
+
+  if (!outfit.length) {
+    return [];
+  }
+
+  const used = new Set(outfit.map((product) => product.id));
+  let remainingBudget = intent.budget - outfitTotal(outfit);
+
+  (["shoe", "outerwear", "bag", "accessory"] as Category[]).forEach((category) => {
+    const item = pickBest(recommendations, category, used, remainingBudget);
+    if (item) {
+      outfit.push(item);
+      remainingBudget -= item.price;
+    }
+  });
+
+  return outfit;
+};
+
+const buildRequestedCategories = (recommendations: Recommendation[], intent: StyleIntent) => {
+  const used = new Set<string>();
+  const outfit = intent.categories
+    .map((category) => pickBest(recommendations, category, used))
+    .filter((product): product is Product => Boolean(product));
+
+  return outfit.length === intent.categories.length ? outfit : [];
+};
+
+const buildBudgetedRequestedCategories = (
+  recommendations: Recommendation[],
+  intent: StyleIntent,
+) => {
+  if (!intent.budget) return undefined;
+
+  const used = new Set<string>();
+  const outfit: Product[] = [];
+  let remainingBudget = intent.budget;
+
+  intent.categories.forEach((category) => {
+    const item = pickBest(recommendations, category, used, remainingBudget);
+    if (item) {
+      outfit.push(item);
+      remainingBudget -= item.price;
+    }
+  });
+
+  return outfit.length === intent.categories.length ? outfit : [];
+};
+
+const hasCompleteBase = (recommendations: Recommendation[]) => {
+  const hasDress = recommendations.some(({ product }) => product.category === "dress");
+  const hasTop = recommendations.some(({ product }) => product.category === "top");
+  const hasBottom = recommendations.some(({ product }) => product.category === "bottom");
+  return hasDress || (hasTop && hasBottom);
+};
+
 export const buildOutfit = (
   recommendations: Recommendation[],
   intent: StyleIntent,
 ): Product[] => {
+  const eligibleRecommendations = recommendations.filter(({ product }) =>
+    productMeetsHardConstraints(product, intent),
+  );
+
+  if (
+    intent.wantsCompleteOutfit &&
+    intent.budgetScope === "item" &&
+    !hasCompleteBase(eligibleRecommendations)
+  ) {
+    return [];
+  }
+
+  if (intent.budget && intent.budgetScope === "total") {
+    const budgetedOutfit =
+      intent.wantsCompleteOutfit || intent.categories.length === 0
+        ? buildBudgetedCompleteOutfit(eligibleRecommendations, intent)
+        : buildBudgetedRequestedCategories(eligibleRecommendations, intent);
+
+    return (budgetedOutfit ?? []).slice(0, 5);
+  }
+
+  if (intent.categories.length && !intent.wantsCompleteOutfit) {
+    return buildRequestedCategories(eligibleRecommendations, intent).slice(0, 5);
+  }
+
   const used = new Set<string>();
   const outfit: Product[] = [];
 
   const includeDress = intent.categories.includes("dress")
     ? true
-    : recommendations.some(
+    : eligibleRecommendations.some(
         ({ product }) =>
           product.category === "dress" &&
           (product.occasions.includes(intent.occasion) ||
@@ -347,24 +546,24 @@ export const buildOutfit = (
       );
 
   if (includeDress) {
-    const dress = pickBest(recommendations, "dress", used);
+    const dress = pickBest(eligibleRecommendations, "dress", used);
     if (dress) {
       outfit.push(dress);
     }
   } else {
-    const top = pickBest(recommendations, "top", used);
-    const bottom = pickBest(recommendations, "bottom", used);
+    const top = pickBest(eligibleRecommendations, "top", used);
+    const bottom = pickBest(eligibleRecommendations, "bottom", used);
     if (top) outfit.push(top);
     if (bottom) outfit.push(bottom);
   }
 
   (["outerwear", "shoe", "bag", "accessory"] as Category[]).forEach((category) => {
-    const item = pickBest(recommendations, category, used);
+    const item = pickBest(eligibleRecommendations, category, used);
     if (item) outfit.push(item);
   });
 
   if (outfit.length < 4) {
-    recommendations.forEach(({ product }) => {
+    eligibleRecommendations.forEach(({ product }) => {
       if (outfit.length < 5 && !used.has(product.id)) {
         used.add(product.id);
         outfit.push(product);
@@ -381,29 +580,110 @@ const titleCase = (value: string) =>
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
 
+const minimumBaseOutfitTotal = (products: Product[], intent: StyleIntent) => {
+  const sizeEligible = products.filter((product) =>
+    intent.size ? product.sizes.includes(intent.size) : true,
+  );
+  const occasionEligible =
+    intent.occasion === "everyday"
+      ? sizeEligible
+      : sizeEligible.filter((product) => product.occasions.includes(intent.occasion));
+  const candidates = occasionEligible.length ? occasionEligible : sizeEligible;
+  const tops = candidates.filter((product) => product.category === "top");
+  const bottoms = candidates.filter((product) => product.category === "bottom");
+  const dresses = candidates.filter((product) => product.category === "dress");
+  const cheapestSeparates = tops
+    .flatMap((top) => bottoms.map((bottom) => top.price + bottom.price))
+    .sort((a, b) => a - b)[0];
+  const cheapestDress = dresses.map((dress) => dress.price).sort((a, b) => a - b)[0];
+  const totals = [cheapestSeparates, cheapestDress].filter(
+    (total): total is number => total !== undefined,
+  );
+
+  return totals.length ? Math.min(...totals) : undefined;
+};
+
+const exactFailureRationale = (
+  products: Product[],
+  intent: StyleIntent,
+  recommendations: Recommendation[],
+) => {
+  const budgetText =
+    intent.budget && intent.budgetScope === "total"
+      ? `under $${intent.budget} total`
+      : intent.budget && intent.budgetScope === "item"
+        ? `with every item under $${intent.budget}`
+        : "with the requested hard constraints";
+  const exactAffordableProducts = recommendations.filter(({ product }) =>
+    productMeetsHardConstraints(product, intent) &&
+    (!intent.budget || intent.budgetScope !== "total" || product.price <= intent.budget),
+  );
+  const minimumBase = minimumBaseOutfitTotal(products, intent);
+  const baseText =
+    intent.wantsCompleteOutfit && minimumBase
+      ? ` The lowest base outfit I can assemble from this catalog is ${new Intl.NumberFormat(
+          "en-US",
+          {
+            style: "currency",
+            currency: "USD",
+            maximumFractionDigits: 0,
+          },
+        ).format(minimumBase)} before optional shoes, bags, or accessories.`
+      : "";
+  const availableText = exactAffordableProducts.length
+    ? ` ${exactAffordableProducts.length} individual product${
+        exactAffordableProducts.length === 1 ? "" : "s"
+      } ${
+        exactAffordableProducts.length === 1 ? "meets" : "meet"
+      } the hard price/size filter, but ${
+        exactAffordableProducts.length === 1 ? "it does" : "they do"
+      } not satisfy the complete requested outfit.`
+    : " No products in the current catalog satisfy the hard filter well enough to form the requested outfit.";
+
+  return `I could not build an exact ${intent.vibe} ${intent.occasion} result ${budgetText}. The budget and size filters are hard constraints, so I did not include over-budget or unavailable-size items.${baseText}${availableText}`;
+};
+
 export const generateStylistResult = (
   products: Product[],
   query: string,
 ): StylistResult => {
   const intent = parseStyleIntent(query);
-  const recommendations = retrieveProducts(products, intent).slice(0, 8);
-  const outfit = buildOutfit(recommendations, intent);
+  const allRecommendations = retrieveProducts(products, intent);
+  const recommendations = allRecommendations.slice(0, 8);
+  const outfit = buildOutfit(allRecommendations, intent);
   const palette = unique(outfit.flatMap((item) => item.colors)).slice(0, 5);
   const total = outfit.reduce((sum, item) => sum + item.price, 0);
-  const title = `${titleCase(intent.vibe)} ${titleCase(intent.occasion)} Edit`;
-  const rationale = [
-    `I read this as a ${intent.vibe} ${intent.occasion} request.`,
-    `The outfit anchors on ${outfit
-      .slice(0, 2)
-      .map((item) => item.name)
-      .join(" and ")}, then adds ${outfit
-      .slice(2)
-      .map((item) => item.name)
-      .join(", ")} for balance.`,
-    intent.constraints.length
-      ? `Constraints considered: ${intent.constraints.join(", ")}.`
-      : "No hard constraints were detected, so the retrieval weighted occasion, color, category, and semantic similarity.",
-  ].join(" ");
+  const title = outfit.length
+    ? `${titleCase(intent.vibe)} ${titleCase(intent.occasion)} Edit`
+    : `No Exact ${titleCase(intent.vibe)} ${titleCase(intent.occasion)} Match`;
+  const itemNames = outfit.map((item) => item.name);
+  const anchorText =
+    itemNames.length > 2
+      ? `The outfit anchors on ${itemNames.slice(0, 2).join(" and ")}, then adds ${itemNames
+          .slice(2)
+          .join(", ")} for balance.`
+      : `The outfit uses ${itemNames.join(" and ")}.`;
+  const budgetText =
+    intent.budget && intent.budgetScope === "total"
+      ? ` Total is ${new Intl.NumberFormat("en-US", {
+          style: "currency",
+          currency: "USD",
+          maximumFractionDigits: 0,
+        }).format(total)}, within the ${new Intl.NumberFormat("en-US", {
+          style: "currency",
+          currency: "USD",
+          maximumFractionDigits: 0,
+        }).format(intent.budget)} total budget.`
+      : "";
+  const rationale = outfit.length
+    ? [
+        `I read this as a ${intent.vibe} ${intent.occasion} request.`,
+        anchorText,
+        intent.constraints.length
+          ? `Hard constraints applied: ${intent.constraints.join(", ")}.${budgetText}`
+          : "No hard constraints were detected, so the retrieval weighted occasion, color, category, and semantic similarity.",
+      ].join(" ")
+    : exactFailureRationale(products, intent, allRecommendations);
 
   return {
     intent,
