@@ -53,8 +53,8 @@ type Tab = "stylist" | "catalog" | "saved";
 
 const promptChips = [
   "Build a polished work outfit under $300",
-  "I need a minimal dinner look with black pieces",
-  "Plan a comfortable travel outfit for warm weather",
+  "Create a black dinner look with futuristic polish",
+  "Plan a bright travel outfit for warm weather",
   "Give me a wedding guest outfit with silver accessories",
 ];
 
@@ -112,7 +112,7 @@ function App() {
       role: "assistant",
       createdAt: new Date(),
       content:
-        "Tell me the occasion, budget, colors, size, or style you want. I will retrieve products, rank matches, and build a coordinated outfit.",
+        "Drop in an occasion, budget, palette, size, or hero item. I will rank the catalog and render a coordinated outfit.",
     },
   ]);
   const [searchTerm, setSearchTerm] = useState("");
@@ -451,17 +451,20 @@ function App() {
 
       <section className="hero-band">
         <div className="hero-copy">
-          <p className="eyebrow">Structured prompts + embeddings + product retrieval</p>
-          <h2>Ask for an occasion. Get a shoppable outfit with ranked retail items.</h2>
+          <p className="eyebrow">Firebase retail intelligence</p>
+          <h2>Style a complete shopper cart from one high-signal request.</h2>
           <p>
-            This prototype combines Firebase-backed customer state with an on-device
-            retrieval engine that parses styling intent, scores catalog products, and
-            saves the session history for signed-in shoppers.
+            A colorful styling console for outfit discovery, product retrieval,
+            wardrobe uploads, and saved looks.
           </p>
         </div>
         <div className="hero-media" aria-label="Styled product collage">
           {sampleProducts.slice(0, 5).map((product) => (
-            <img key={product.id} src={product.imageUrl} alt={product.name} />
+            <article key={product.id} className="hero-tile">
+              <img src={product.imageUrl} alt={product.name} loading="eager" />
+              <span>{product.category}</span>
+              <strong>{product.name}</strong>
+            </article>
           ))}
         </div>
       </section>
@@ -526,9 +529,9 @@ function App() {
             <div className="panel-heading">
               <div>
                 <p className="eyebrow">Customer query</p>
-                <h2>Styling chat</h2>
+                <h2>Style console</h2>
               </div>
-              <span className="live-pill">Retrieval ready</span>
+              <span className="live-pill">Neural retrieval online</span>
             </div>
 
             <div className="prompt-row">
@@ -572,7 +575,7 @@ function App() {
           <aside className="result-panel">
             <div className="panel-heading">
               <div>
-                <p className="eyebrow">Recommended outfit</p>
+                <p className="eyebrow">Outfit render</p>
                 <h2>{activeResult.title}</h2>
               </div>
               <button
@@ -801,7 +804,7 @@ function ProductCard({
         </div>
         <button type="button" onClick={() => onStyleProduct(product)}>
           <ShoppingBag size={17} />
-          Add to styling set
+          Style this item
           <ChevronRight size={16} />
         </button>
       </div>

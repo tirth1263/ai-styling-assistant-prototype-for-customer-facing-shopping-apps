@@ -11,7 +11,8 @@ service firebase.storage {
     }
 
     match /wardrobe/{userId}/{fileName} {
-      allow read, write: if owns(userId)
+      allow read: if owns(userId);
+      allow write: if owns(userId)
         && request.resource.size < 8 * 1024 * 1024
         && request.resource.contentType.matches('image/.*');
     }
